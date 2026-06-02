@@ -1,0 +1,21 @@
+{
+  "name": "pino-agent",
+  "version": "0.0.0",
+  "description": "Minimal Pi-based agent harness with blessed defaults",
+  "type": "module",
+  "bin": {
+    "pino": "./src/cli.ts"
+  },
+  "scripts": {
+    "start": "node src/cli.ts",
+    "pino": "node src/cli.ts",
+    "test": "node --test test/**/*.test.ts"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "^0.75.5",
+    "commander": "^15.0.0"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}

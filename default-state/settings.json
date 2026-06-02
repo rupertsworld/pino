@@ -1,0 +1,11 @@
+{
+	"packages": [
+		"npm:@llblab/pi-telegram@0.15.0",
+		"npm:pi-schedule-prompt"
+	],
+	"systemPrompt": "SYSTEM.md",
+	"timeZone": "Australia/Sydney",
+	"contextFiles": [
+		"AGENTS.md"
+	]
+}
