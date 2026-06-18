@@ -6,7 +6,7 @@ import type { CreateAgentSessionRuntimeFactory } from "@earendil-works/pi-coding
 import { createDynamicSystemPromptExtension } from "./dynamic-system-prompt.ts";
 import { getConfig, getConfiguredResources, getSkillsDir, renderSystemPromptTemplate, scaffold, type Config } from "./state.ts";
 
-const VERSION = "0.0.0";
+const VERSION = "0.1.2";
 
 interface ParsedArgs {
 }

@@ -1,4 +1,4 @@
-import { constants } from "node:fs";
+import { constants, existsSync } from "node:fs";
 import { access, cp, mkdir, readFile, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -19,12 +19,21 @@ interface Settings {
 }
 
 export function getConfig(): Config {
-	const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 	return {
 		workspace: resolve(process.env.PINO_WORKSPACE ?? process.cwd()),
 		stateDir: resolve(process.env.PINO_STATE_DIR ?? join(homedir(), ".pino")),
-		packageRoot,
+		packageRoot: findPackageRoot(dirname(fileURLToPath(import.meta.url))),
 	};
+}
+
+function findPackageRoot(startDir: string): string {
+	let current = resolve(startDir);
+	while (true) {
+		if (existsSync(join(current, "default-state"))) return current;
+		const parent = dirname(current);
+		if (parent === current) return resolve(startDir, "..");
+		current = parent;
+	}
 }
 
 export function getSkillsDir(config: Config): string {
