@@ -5,6 +5,8 @@ import type { CreateAgentSessionRuntimeFactory } from "@earendil-works/pi-coding
 
 import { createDynamicSystemPromptExtension } from "./dynamic-system-prompt.ts";
 import { getConfig, getConfiguredResources, getSkillsDir, renderSystemPromptTemplate, scaffold, type Config } from "./state.ts";
+import { runAcpAttach } from "./acp/attach.ts";
+import { startAcpSocketServer, type AcpSocketServer } from "./acp/socket.ts";
 
 const VERSION = "0.1.2";
 
@@ -111,12 +113,33 @@ async function runInteractive(config: Config, _args: ParsedArgs): Promise<void> 
 		initialMessages: [],
 	});
 
-	await mode.run();
+	// Expose the live session over ACP alongside the TUI. Starting it must never
+	// be fatal to the TUI, so any failure is logged and ignored.
+	let acpServer: AcpSocketServer | undefined;
+	try {
+		acpServer = await startAcpSocketServer(runtime.session, config.stateDir);
+	} catch (error) {
+		console.error(`[pino acp] failed to start ACP socket: ${error instanceof Error ? error.message : String(error)}`);
+	}
+
+	try {
+		await mode.run();
+	} finally {
+		await acpServer?.close().catch(() => {});
+	}
 }
 
 async function main(): Promise<void> {
-	const args = parseArgs(process.argv.slice(2));
+	const argv = process.argv.slice(2);
 	const config = getConfig();
+
+	// `pino acp-attach` is a pure stdio<->socket relay; it never starts a runtime.
+	if (argv[0] === "acp-attach") {
+		process.exitCode = await runAcpAttach(config.stateDir);
+		return;
+	}
+
+	const args = parseArgs(argv);
 	if (process.env.PINO_INTERNAL_DUMP_RUNTIME === "1") {
 		await dumpRuntime(config);
 		return;

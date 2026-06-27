@@ -26,6 +26,7 @@
     "prepack": "npm run build"
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "^0.18.1",
     "@earendil-works/pi-coding-agent": "^0.75.5",
     "commander": "^15.0.0"
   },
