@@ -135,6 +135,27 @@ describe("acp agent round-trip", () => {
 		assert.ok(Array.isArray(result.configOptions));
 	});
 
+	it("surfaces a prompt failure as an assistant message and ends the turn", async () => {
+		const fake = createFakeSession();
+		// pino rejects (no agent_end) when a turn can't run, e.g. missing API key.
+		fake.onPrompt(() => {
+			throw new Error("No API key found for openrouter.");
+		});
+		const { client, agent } = await connectClient(fake);
+		await agent.initialize({ protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities: {} });
+		const session = await agent.newSession({ cwd: "/tmp", mcpServers: [] });
+
+		const result = await agent.prompt({ sessionId: session.sessionId, prompt: [{ type: "text", text: "hello" }] });
+
+		assert.equal(result.stopReason, "end_turn");
+		const text = client.updates
+			.map((u) => u.update)
+			.filter((u): u is Extract<typeof u, { sessionUpdate: "agent_message_chunk" }> => u.sessionUpdate === "agent_message_chunk")
+			.map((u) => (u.content.type === "text" ? u.content.text : ""))
+			.join("");
+		assert.match(text, /No API key found for openrouter/);
+	});
+
 	it("resolves with cancelled when cancel is received during a turn", async () => {
 		const fake = createFakeSession();
 		const { agent } = await connectClient(fake);

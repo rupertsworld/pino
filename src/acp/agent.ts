@@ -79,16 +79,24 @@ export class PinoAcpAgent implements acp.Agent {
 		this.cancelled = false;
 		const text = extractText(params.prompt);
 
+		let turnError: unknown;
 		const turnEnded = new Promise<void>((resolve) => {
 			this.resolveTurn = resolve;
 		});
-		void this.session.prompt(text, { source: "rpc" }).catch(() => {
-			// A prompt failure still ends the turn; surface nothing in M1.
+		void this.session.prompt(text, { source: "rpc" }).catch((error: unknown) => {
+			// pino rejects (rather than emitting agent_end) when a turn can't run —
+			// e.g. no API key. Capture it so we can surface it instead of leaving
+			// the client stuck on "Thinking…" with no content.
+			turnError = error;
 			this.resolveTurn?.();
 		});
 		await turnEnded;
 		this.resolveTurn = undefined;
 
+		if (turnError !== undefined && !this.cancelled) {
+			const message = turnError instanceof Error ? turnError.message : String(turnError);
+			this.send({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: `⚠️ ${message}` } });
+		}
 		return { stopReason: this.cancelled ? "cancelled" : "end_turn" };
 	}
 
