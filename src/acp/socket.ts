@@ -38,23 +38,31 @@ function logError(message: string): void {
 function isListenerAlive(path: string): Promise<boolean> {
 	return new Promise((resolve) => {
 		const probe = connect(path);
-		probe.once("connect", () => {
+		const settle = (result: boolean) => {
+			clearTimeout(timer);
 			probe.destroy();
-			resolve(true);
-		});
-		probe.once("error", () => {
-			probe.destroy();
-			resolve(false);
-		});
+			resolve(result);
+		};
+		// A wedged owner could accept the connection but never respond; cap the
+		// probe so it can't hang startup. Treat a timeout as "stale" and rebind.
+		const timer = setTimeout(() => settle(false), 500);
+		probe.once("connect", () => settle(true));
+		probe.once("error", () => settle(false));
 	});
 }
 
-export async function startAcpSocketServer(session: PinoAgentSession, stateDir: string): Promise<AcpSocketServer> {
+export async function startAcpSocketServer(getSession: () => PinoAgentSession, stateDir: string): Promise<AcpSocketServer> {
 	const path = acpSocketPath(stateDir);
 
-	if (await isListenerAlive(path)) {
+	// Another live pino already owns the socket — run without the listener rather
+	// than fail the TUI. Used by both the liveness probe and the bind-race catch.
+	const standDown = (): AcpSocketServer => {
 		logError(`a pino ACP listener is already active at ${path}; skipping (single-pino only).`);
 		return { path, skipped: true, close: async () => {} };
+	};
+
+	if (await isListenerAlive(path)) {
+		return standDown();
 	}
 
 	// Either nothing exists or it's a stale file/socket — clear it before binding.
@@ -67,7 +75,7 @@ export async function startAcpSocketServer(session: PinoAgentSession, stateDir: 
 			// Each connection gets its own agent bound to the one live session.
 			let agent: PinoAcpAgent | undefined;
 			new acp.AgentSideConnection((conn) => {
-				agent = new PinoAcpAgent(conn, session);
+				agent = new PinoAcpAgent(conn, getSession);
 				return agent;
 			}, stream);
 			// Drop this connection's session subscription when the socket closes,
@@ -81,14 +89,24 @@ export async function startAcpSocketServer(session: PinoAgentSession, stateDir: 
 
 	server.on("error", (error) => logError(`server error: ${error.message}`));
 
-	await new Promise<void>((resolve, reject) => {
-		const onError = (error: Error) => reject(error);
-		server.once("error", onError);
-		server.listen(path, () => {
-			server.off("error", onError);
-			resolve();
+	try {
+		await new Promise<void>((resolve, reject) => {
+			const onError = (error: Error) => reject(error);
+			server.once("error", onError);
+			server.listen(path, () => {
+				server.off("error", onError);
+				resolve();
+			});
 		});
-	});
+	} catch (error) {
+		// Lost a concurrent double-start race: another pino bound the socket
+		// between our liveness probe and our listen. Stand down quietly rather
+		// than surfacing a scary startup failure.
+		if ((error as NodeJS.ErrnoException)?.code === "EADDRINUSE") {
+			return standDown();
+		}
+		throw error;
+	}
 
 	const cleanupOnExit = () => {
 		try {

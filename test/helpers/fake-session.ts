@@ -13,6 +13,10 @@ export interface FakeSession extends PinoAgentSession {
 	readonly abortCount: number;
 	/** Current number of active event subscribers. */
 	readonly listenerCount: number;
+	/** Whether the session is mid-turn; settable so tests can drive the busy path. */
+	isStreaming: boolean;
+	/** Options passed to the most recent `prompt()` call. */
+	readonly lastPromptOptions: { source?: string; streamingBehavior?: "steer" | "followUp" } | undefined;
 }
 
 export function createFakeSession(options: { sessionId?: string } = {}): FakeSession {
@@ -21,15 +25,18 @@ export function createFakeSession(options: { sessionId?: string } = {}): FakeSes
 	let abortCount = 0;
 	let promptHandler: ((text: string) => void) | undefined;
 	let abortHandler: (() => void) | undefined;
+	let lastPromptOptions: { source?: string; streamingBehavior?: "steer" | "followUp" } | undefined;
 
 	const session: FakeSession = {
 		sessionId: options.sessionId ?? "fake-session-id",
+		isStreaming: false,
 		subscribe(listener) {
 			listeners.add(listener);
 			return () => listeners.delete(listener);
 		},
-		async prompt(text) {
+		async prompt(text, opts) {
 			prompts.push(text);
+			lastPromptOptions = opts;
 			promptHandler?.(text);
 		},
 		async abort() {
@@ -53,6 +60,9 @@ export function createFakeSession(options: { sessionId?: string } = {}): FakeSes
 		},
 		get listenerCount() {
 			return listeners.size;
+		},
+		get lastPromptOptions() {
+			return lastPromptOptions;
 		},
 	};
 	return session;

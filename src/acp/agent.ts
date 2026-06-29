@@ -17,8 +17,10 @@ import type * as acp from "@agentclientprotocol/sdk";
  */
 export interface PinoAgentSession {
 	readonly sessionId: string;
+	/** True while a turn is streaming; pi requires a streamingBehavior for prompts sent mid-turn. */
+	readonly isStreaming: boolean;
 	subscribe(listener: (event: SessionEvent) => void): () => void;
-	prompt(text: string, options?: { source?: string }): Promise<void>;
+	prompt(text: string, options?: { source?: string; streamingBehavior?: "steer" | "followUp" }): Promise<void>;
 	abort(): Promise<void>;
 }
 
@@ -28,21 +30,23 @@ export type SessionEvent =
 	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args: unknown }
 	| { type: "tool_execution_update"; toolCallId: string; toolName?: string }
 	| { type: "tool_execution_end"; toolCallId: string; toolName: string; result: unknown; isError: boolean }
-	| { type: "agent_end" }
+	| { type: "agent_end"; willRetry?: boolean }
 	| { type: string };
 
 const VERSION = "0.1.2";
 
 export class PinoAcpAgent implements acp.Agent {
 	private readonly conn: acp.AgentSideConnection;
-	private readonly session: PinoAgentSession;
+	private readonly getSession: () => PinoAgentSession;
+	/** The session this connection is currently subscribed to (may change on TUI switch). */
+	private boundSession?: PinoAgentSession;
 	private unsubscribe?: () => void;
 	private resolveTurn?: () => void;
 	private cancelled = false;
 
-	constructor(conn: acp.AgentSideConnection, session: PinoAgentSession) {
+	constructor(conn: acp.AgentSideConnection, getSession: () => PinoAgentSession) {
 		this.conn = conn;
-		this.session = session;
+		this.getSession = getSession;
 	}
 
 	async initialize(_params: acp.InitializeRequest): Promise<acp.InitializeResponse> {
@@ -70,20 +74,26 @@ export class PinoAcpAgent implements acp.Agent {
 	async newSession(_params: acp.NewSessionRequest): Promise<acp.NewSessionResponse> {
 		// M1: bind to the single live in-process session. No id bookkeeping, no
 		// history replay — the client just sees the live session going forward.
-		this.bind();
-		return { sessionId: this.session.sessionId };
+		const session = this.bind();
+		return { sessionId: session.sessionId };
 	}
 
 	async prompt(params: acp.PromptRequest): Promise<acp.PromptResponse> {
-		this.bind();
+		const session = this.bind();
 		this.cancelled = false;
 		const text = extractText(params.prompt);
+
+		// pi's prompt() throws if called while a turn is streaming and no
+		// streamingBehavior is given. Queue mid-turn prompts as follow-ups so a
+		// busy TUI (or a second connection) doesn't surface a raw error.
+		const options: { source?: string; streamingBehavior?: "steer" | "followUp" } = { source: "rpc" };
+		if (session.isStreaming) options.streamingBehavior = "followUp";
 
 		let turnError: unknown;
 		const turnEnded = new Promise<void>((resolve) => {
 			this.resolveTurn = resolve;
 		});
-		void this.session.prompt(text, { source: "rpc" }).catch((error: unknown) => {
+		void session.prompt(text, options).catch((error: unknown) => {
 			// pino rejects (rather than emitting agent_end) when a turn can't run —
 			// e.g. no API key. Capture it so we can surface it instead of leaving
 			// the client stuck on "Thinking…" with no content.
@@ -102,13 +112,25 @@ export class PinoAcpAgent implements acp.Agent {
 
 	async cancel(_params: acp.CancelNotification): Promise<void> {
 		this.cancelled = true;
-		await this.session.abort();
+		await this.bind().abort();
 	}
 
-	/** Subscribe to the live session (idempotent for this connection). */
-	private bind(): void {
-		if (this.unsubscribe) return;
-		this.unsubscribe = this.session.subscribe((event) => this.handleSessionEvent(event));
+	/**
+	 * Subscribe to the current live session and return it. The TUI reassigns
+	 * `runtime.session` on session switch (`/new`, resume, fork, jsonl import), so
+	 * we resolve the accessor each call and, when it has changed, move our
+	 * subscription from the old session to the new one. (pi's `setRebindSession`
+	 * hook is single-owner and already claimed by the TUI, so we can't subscribe
+	 * to switches directly — hence resolving lazily on each ACP call.)
+	 */
+	private bind(): PinoAgentSession {
+		const session = this.getSession();
+		if (session !== this.boundSession) {
+			this.unsubscribe?.();
+			this.unsubscribe = session.subscribe((event) => this.handleSessionEvent(event));
+			this.boundSession = session;
+		}
+		return session;
 	}
 
 	/**
@@ -118,6 +140,7 @@ export class PinoAcpAgent implements acp.Agent {
 	dispose(): void {
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
+		this.boundSession = undefined;
 		this.resolveTurn?.();
 		this.resolveTurn = undefined;
 	}
@@ -160,6 +183,10 @@ export class PinoAcpAgent implements acp.Agent {
 				break;
 			}
 			case "agent_end": {
+				// pi wraps every agent_end with `willRetry`. On a retryable failure it
+				// emits agent_end{willRetry:true}, retries, then agent_end{willRetry:false}.
+				// Only the final (willRetry:false) event ends the turn.
+				if ((event as Extract<SessionEvent, { type: "agent_end" }>).willRetry) return;
 				this.resolveTurn?.();
 				break;
 			}
@@ -168,7 +195,8 @@ export class PinoAcpAgent implements acp.Agent {
 
 	/** Fire a session update to the client; never let a write error escape. */
 	private send(update: acp.SessionUpdate): void {
-		void this.conn.sessionUpdate({ sessionId: this.session.sessionId, update }).catch(() => {});
+		const sessionId = (this.boundSession ?? this.getSession()).sessionId;
+		void this.conn.sessionUpdate({ sessionId, update }).catch(() => {});
 	}
 }
 

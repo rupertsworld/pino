@@ -28,13 +28,22 @@ export function runAcpAttach(stateDir: string): Promise<number> {
 			finish(1);
 		});
 
+		// A broken stdout pipe (host went away) must not crash the relay; just stop.
+		process.stdout.on("error", () => finish(0));
+
 		socket.once("connect", () => {
 			process.stdin.pipe(socket);
 			socket.pipe(process.stdout);
-			// Either side closing ends the relay.
-			socket.once("close", () => finish(0));
+			// Either side closing ends the relay. On socket close, detach stdin so a
+			// still-flowing stdin can't keep the process alive piped into a dead socket.
+			socket.once("close", () => {
+				process.stdin.unpipe(socket);
+				process.stdin.pause();
+				finish(0);
+			});
 			process.stdin.once("end", () => socket.end());
-			socket.once("error", () => finish(1));
+			// Guard the live socket too: a broken pipe shouldn't throw, just end the relay.
+			socket.on("error", () => finish(1));
 		});
 	});
 }

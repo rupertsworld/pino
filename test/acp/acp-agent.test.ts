@@ -7,8 +7,8 @@ import { join } from "node:path";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 
-import { acpSocketPath, startAcpSocketServer, type AcpSocketServer } from "../src/acp/socket.ts";
-import { createFakeSession, type FakeSession } from "./helpers/fake-session.ts";
+import { acpSocketPath, startAcpSocketServer, type AcpSocketServer } from "../../src/acp/socket.ts";
+import { createFakeSession, type FakeSession } from "../helpers/fake-session.ts";
 
 class RecordingClient implements acp.Client {
 	readonly updates: acp.SessionNotification[] = [];
@@ -26,8 +26,11 @@ let stateDir: string;
 let server: AcpSocketServer;
 let socket: Socket;
 
-async function connectClient(fake: FakeSession): Promise<{ client: RecordingClient; agent: acp.ClientSideConnection }> {
-	server = await startAcpSocketServer(fake, stateDir);
+async function connectClient(
+	session: FakeSession | (() => FakeSession),
+): Promise<{ client: RecordingClient; agent: acp.ClientSideConnection }> {
+	const getSession = typeof session === "function" ? session : () => session;
+	server = await startAcpSocketServer(getSession, stateDir);
 	const path = acpSocketPath(stateDir);
 	socket = connect(path);
 	await new Promise<void>((resolve, reject) => {
@@ -174,5 +177,71 @@ describe("acp agent round-trip", () => {
 		});
 		assert.equal(result.stopReason, "cancelled");
 		assert.equal(fake.abortCount, 1);
+	});
+
+	it("does not end the turn on a retryable agent_end (willRetry) and streams the retried run", async () => {
+		const fake = createFakeSession();
+		fake.onPrompt(() => {
+			// pi emits agent_end{willRetry:true} on a retryable failure, retries, then
+			// emits the final agent_end{willRetry:false}. The turn must only end on the latter.
+			fake.emit({ type: "agent_end", willRetry: true });
+			fake.emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "after retry" } });
+			fake.emit({ type: "agent_end", willRetry: false });
+		});
+		const { client, agent } = await connectClient(fake);
+		await agent.initialize({ protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities: {} });
+		const session = await agent.newSession({ cwd: "/tmp", mcpServers: [] });
+
+		const result = await agent.prompt({ sessionId: session.sessionId, prompt: [{ type: "text", text: "go" }] });
+		assert.equal(result.stopReason, "end_turn");
+
+		const chunks = client.updates
+			.map((u) => u.update)
+			.filter((u): u is Extract<typeof u, { sessionUpdate: "agent_message_chunk" }> => u.sessionUpdate === "agent_message_chunk")
+			.map((u) => (u.content.type === "text" ? u.content.text : ""));
+		assert.deepEqual(chunks, ["after retry"], "text emitted after the willRetry:true agent_end must still stream");
+	});
+
+	it("follows a session switch via the accessor, forwarding new-session events and dropping the old subscription", async () => {
+		const a = createFakeSession({ sessionId: "session-a" });
+		const b = createFakeSession({ sessionId: "session-b" });
+		let current: FakeSession = a;
+		b.onPrompt(() => {
+			b.emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "from B" } });
+			b.emit({ type: "agent_end" });
+		});
+
+		const { client, agent } = await connectClient(() => current);
+		await agent.initialize({ protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities: {} });
+		await agent.newSession({ cwd: "/tmp", mcpServers: [] });
+		assert.equal(a.listenerCount, 1, "newSession should subscribe to the current session A");
+
+		// Simulate a TUI session switch: the accessor now returns B.
+		current = b;
+		const result = await agent.prompt({ sessionId: "session-b", prompt: [{ type: "text", text: "hi" }] });
+		assert.equal(result.stopReason, "end_turn");
+		assert.deepEqual(b.prompts, ["hi"], "the prompt must be driven on the current session B");
+		assert.equal(a.listenerCount, 0, "the old session A must have no remaining subscribers");
+
+		const chunks = client.updates
+			.map((u) => u.update)
+			.filter((u): u is Extract<typeof u, { sessionUpdate: "agent_message_chunk" }> => u.sessionUpdate === "agent_message_chunk")
+			.map((u) => (u.content.type === "text" ? u.content.text : ""));
+		assert.deepEqual(chunks, ["from B"], "events from the new session B must be forwarded");
+	});
+
+	it("passes streamingBehavior:followUp when the session is mid-turn (does not reject)", async () => {
+		const fake = createFakeSession();
+		fake.isStreaming = true;
+		fake.onPrompt(() => {
+			fake.emit({ type: "agent_end" });
+		});
+		const { agent } = await connectClient(fake);
+		await agent.initialize({ protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities: {} });
+		const session = await agent.newSession({ cwd: "/tmp", mcpServers: [] });
+
+		const result = await agent.prompt({ sessionId: session.sessionId, prompt: [{ type: "text", text: "queued" }] });
+		assert.equal(result.stopReason, "end_turn");
+		assert.equal(fake.lastPromptOptions?.streamingBehavior, "followUp");
 	});
 });

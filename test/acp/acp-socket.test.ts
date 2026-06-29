@@ -5,8 +5,8 @@ import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { acpSocketPath, startAcpSocketServer } from "../src/acp/socket.ts";
-import { createFakeSession } from "./helpers/fake-session.ts";
+import { acpSocketPath, startAcpSocketServer } from "../../src/acp/socket.ts";
+import { createFakeSession } from "../helpers/fake-session.ts";
 
 let stateDir: string;
 
@@ -34,7 +34,7 @@ function canConnect(path: string): Promise<boolean> {
 
 describe("acp socket lifecycle", () => {
 	it("creates a listening socket at the expected path", async () => {
-		const server = await startAcpSocketServer(createFakeSession(), stateDir);
+		const server = await startAcpSocketServer(() => createFakeSession(), stateDir);
 		try {
 			assert.equal(server.skipped, false);
 			const path = acpSocketPath(stateDir);
@@ -49,7 +49,7 @@ describe("acp socket lifecycle", () => {
 	it("cleans up a stale socket file and rebinds", async () => {
 		const path = acpSocketPath(stateDir);
 		await writeFile(path, "stale");
-		const server = await startAcpSocketServer(createFakeSession(), stateDir);
+		const server = await startAcpSocketServer(() => createFakeSession(), stateDir);
 		try {
 			assert.equal(server.skipped, false);
 			assert.equal(await canConnect(path), true);
@@ -59,8 +59,8 @@ describe("acp socket lifecycle", () => {
 	});
 
 	it("does not throw and reports skipped when a listener already holds the socket", async () => {
-		const first = await startAcpSocketServer(createFakeSession(), stateDir);
-		const second = await startAcpSocketServer(createFakeSession(), stateDir);
+		const first = await startAcpSocketServer(() => createFakeSession(), stateDir);
+		const second = await startAcpSocketServer(() => createFakeSession(), stateDir);
 		try {
 			assert.equal(first.skipped, false);
 			assert.equal(second.skipped, true);
@@ -72,14 +72,14 @@ describe("acp socket lifecycle", () => {
 
 	it("removes the socket file on close", async () => {
 		const path = acpSocketPath(stateDir);
-		const server = await startAcpSocketServer(createFakeSession(), stateDir);
+		const server = await startAcpSocketServer(() => createFakeSession(), stateDir);
 		await server.close();
 		await assert.rejects(() => stat(path));
 	});
 
 	it("unsubscribes from the session when a client disconnects", async () => {
 		const session = createFakeSession();
-		const server = await startAcpSocketServer(session, stateDir);
+		const server = await startAcpSocketServer(() => session, stateDir);
 		const path = acpSocketPath(stateDir);
 		try {
 			// Connect, drive a subscription via a prompt, then disconnect.

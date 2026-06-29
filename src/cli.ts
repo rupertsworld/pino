@@ -10,33 +10,6 @@ import { startAcpSocketServer, type AcpSocketServer } from "./acp/socket.ts";
 
 const VERSION = "0.1.2";
 
-interface ParsedArgs {
-}
-
-function parseArgs(argv: string[]): ParsedArgs {
-	const program = new Command();
-	program
-		.name("pino")
-		.description("Minimal Pi-based agent harness")
-		.version(VERSION, "-v, --version")
-		.helpOption("-h, --help")
-		.addHelpText(
-			"after",
-			`
-Environment:
-  PINO_STATE_DIR          Pino state/config directory (default: ~/.pino)
-  PINO_WORKSPACE          Directory where the agent works (default: current directory)
-
-Pino starts the Pi coding-agent interactive interface with Pino's state directory and bundled extension set.`,
-		)
-		.action(() => undefined);
-
-	program.allowExcessArguments(false);
-	program.allowUnknownOption(false);
-	program.parse(argv, { from: "user" });
-	return {};
-}
-
 async function createPinoRuntime(config: Config) {
 	process.env.PI_CODING_AGENT_DIR = config.stateDir;
 	process.env.PI_SKIP_VERSION_CHECK = "1";
@@ -105,7 +78,7 @@ async function dumpRuntime(config: Config): Promise<void> {
 	}, null, "\t"));
 }
 
-async function runInteractive(config: Config, _args: ParsedArgs): Promise<void> {
+async function runInteractive(config: Config): Promise<void> {
 	const { InteractiveMode } = await import("@earendil-works/pi-coding-agent");
 	const runtime = await createPinoRuntime(config);
 	const mode = new InteractiveMode(runtime, {
@@ -117,7 +90,9 @@ async function runInteractive(config: Config, _args: ParsedArgs): Promise<void> 
 	// be fatal to the TUI, so any failure is logged and ignored.
 	let acpServer: AcpSocketServer | undefined;
 	try {
-		acpServer = await startAcpSocketServer(runtime.session, config.stateDir);
+		// Pass an accessor, not the session itself: the TUI reassigns
+		// `runtime.session` on session switch, so the socket must resolve it lazily.
+		acpServer = await startAcpSocketServer(() => runtime.session, config.stateDir);
 	} catch (error) {
 		console.error(`[pino acp] failed to start ACP socket: ${error instanceof Error ? error.message : String(error)}`);
 	}
@@ -130,22 +105,42 @@ async function runInteractive(config: Config, _args: ParsedArgs): Promise<void> 
 }
 
 async function main(): Promise<void> {
-	const argv = process.argv.slice(2);
 	const config = getConfig();
 
-	// `pino acp-attach` is a pure stdio<->socket relay; it never starts a runtime.
-	if (argv[0] === "acp-attach") {
-		process.exitCode = await runAcpAttach(config.stateDir);
-		return;
-	}
+	const program = new Command();
+	program
+		.name("pino")
+		.description("Minimal Pi-based agent harness")
+		.version(VERSION, "-v, --version")
+		.helpOption("-h, --help")
+		.addHelpText(
+			"after",
+			`
+Environment:
+  PINO_STATE_DIR          Pino state/config directory (default: ~/.pino)
+  PINO_WORKSPACE          Directory where the agent works (default: current directory)
 
-	const args = parseArgs(argv);
-	if (process.env.PINO_INTERNAL_DUMP_RUNTIME === "1") {
-		await dumpRuntime(config);
-		return;
-	}
+Pino starts the Pi coding-agent interactive interface with Pino's state directory and bundled extension set.`,
+		)
+		.action(async () => {
+			if (process.env.PINO_INTERNAL_DUMP_RUNTIME === "1") {
+				await dumpRuntime(config);
+				return;
+			}
+			await runInteractive(config);
+		});
 
-	await runInteractive(config, args);
+	program
+		.command("acp-attach")
+		.description("Relay stdin/stdout to a running pino's ACP socket (used by ACP hosts)")
+		.action(async () => {
+			// Pure stdio<->socket relay; it never starts a runtime.
+			process.exitCode = await runAcpAttach(config.stateDir);
+		});
+
+	program.allowExcessArguments(false);
+	program.allowUnknownOption(false);
+	await program.parseAsync(process.argv);
 }
 
 main().catch((error) => {
