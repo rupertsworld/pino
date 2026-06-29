@@ -61,6 +61,12 @@ export class PinoAcpAgent implements acp.Agent {
 		return {};
 	}
 
+	async setSessionConfigOption(_params: acp.SetSessionConfigOptionRequest): Promise<acp.SetSessionConfigOptionResponse> {
+		// pino exposes no session config options. Television sets `verbose_level`
+		// on connect, so accept and ignore it rather than 404 the whole connect.
+		return { configOptions: [] };
+	}
+
 	async newSession(_params: acp.NewSessionRequest): Promise<acp.NewSessionResponse> {
 		// M1: bind to the single live in-process session. No id bookkeeping, no
 		// history replay — the client just sees the live session going forward.

@@ -26,7 +26,7 @@ let stateDir: string;
 let server: AcpSocketServer;
 let socket: Socket;
 
-async function connectClient(fake: FakeSession): Promise<{ client: RecordingClient; agent: acp.Agent }> {
+async function connectClient(fake: FakeSession): Promise<{ client: RecordingClient; agent: acp.ClientSideConnection }> {
 	server = await startAcpSocketServer(fake, stateDir);
 	const path = acpSocketPath(stateDir);
 	socket = connect(path);
@@ -120,6 +120,19 @@ describe("acp agent round-trip", () => {
 		assert.ok(toolUpdate, "expected a tool_call_update update");
 		assert.equal(toolUpdate.toolCallId, "t1");
 		assert.equal(toolUpdate.status, "completed");
+	});
+
+	it("answers setSessionConfigOption without erroring (Television connect path)", async () => {
+		const fake = createFakeSession({ sessionId: "live-cfg" });
+		const { agent } = await connectClient(fake);
+		await agent.initialize({ protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities: {} });
+		const session = await agent.newSession({ cwd: "/tmp", mcpServers: [] });
+		const result = await agent.setSessionConfigOption({
+			sessionId: session.sessionId,
+			configId: "verbose_level",
+			value: "full",
+		});
+		assert.ok(Array.isArray(result.configOptions));
 	});
 
 	it("resolves with cancelled when cancel is received during a turn", async () => {
