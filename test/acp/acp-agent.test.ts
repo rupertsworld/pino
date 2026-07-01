@@ -66,12 +66,15 @@ describe("acp agent round-trip", () => {
 		assert.equal(result.agentInfo?.name, "pino");
 	});
 
-	it("binds newSession to the live session id", async () => {
+	it("binds newSession to the live session id and advertises no config options", async () => {
 		const fake = createFakeSession({ sessionId: "live-123" });
 		const { agent } = await connectClient(fake);
 		await agent.initialize({ protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities: {} });
 		const result = await agent.newSession({ cwd: "/tmp", mcpServers: [] });
 		assert.equal(result.sessionId, "live-123");
+		// Advertise an empty config surface so clients don't call
+		// session/set_config_option (which pino doesn't implement).
+		assert.deepEqual(result.configOptions, []);
 	});
 
 	it("streams text deltas as agent_message_chunk and ends with end_turn", async () => {
@@ -123,19 +126,6 @@ describe("acp agent round-trip", () => {
 		assert.ok(toolUpdate, "expected a tool_call_update update");
 		assert.equal(toolUpdate.toolCallId, "t1");
 		assert.equal(toolUpdate.status, "completed");
-	});
-
-	it("answers setSessionConfigOption without erroring (Television connect path)", async () => {
-		const fake = createFakeSession({ sessionId: "live-cfg" });
-		const { agent } = await connectClient(fake);
-		await agent.initialize({ protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities: {} });
-		const session = await agent.newSession({ cwd: "/tmp", mcpServers: [] });
-		const result = await agent.setSessionConfigOption({
-			sessionId: session.sessionId,
-			configId: "verbose_level",
-			value: "full",
-		});
-		assert.ok(Array.isArray(result.configOptions));
 	});
 
 	it("surfaces a prompt failure as an assistant message and ends the turn", async () => {
