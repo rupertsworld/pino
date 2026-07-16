@@ -1,3 +1,7 @@
+*Pino runs AI agents as small persistent processes you can attach to and
+detach from. This is the root spec: what Pino is, its principles, and its
+parts.*
+
 # Pino spec
 
 Pino is an agent microkernel based on [Pi](https://github.com/badlogic/pi-mono).
@@ -29,12 +33,15 @@ surface, not the code. Like Pi, Pino is minimal and extensible.
 
 ## Principles
 
-- **Contracts are message schemas.** Components share no code and import
-  nothing from each other; the only thing that crosses a component boundary
-  is serialized messages. The authoritative definition of every boundary is a
-  schema in `spec/`, owned by Pino — never a type in an implementation's
-  source. A schema may be derived from an existing implementation's shapes,
-  but Pino's document is the contract.
+- **Contracts are message schemas.** Components share no domain code and
+  import nothing of each other's logic; the only thing that crosses a
+  component boundary is serialized messages. The authoritative definition of
+  every boundary is a schema in `spec/`, owned by Pino — never a type in an
+  implementation's source. A schema may be derived from an existing
+  implementation's shapes, but Pino's document is the contract. (Sharing an
+  *implementation of a cross-cutting spec* — the `transport` and `storage`
+  packages — is not this coupling: the contract is still the spec, which a
+  component in another language reimplements. See [[implementation/index.md]].)
 - **Components are addressable processes.** Each component runs as its own
   process and listens on its own endpoint. Any component can be reimplemented
   in any language and interoperate, because conformance means speaking the
@@ -42,10 +49,10 @@ surface, not the code. Like Pi, Pino is minimal and extensible.
 
 ## Conventions
 
-Method names are snake_case; message field names are camelCase — ACP's
-convention, adopted wholesale (`session/set_config_option` carrying
-`sessionId`-style fields). Field names borrowed from another protocol keep
-their original spelling (`clientInfo`, `serverInfo`, as in MCP).
+Method and message field names are camelCase — Pi's convention, shared by
+MCP and LSP (`listModels`, `clientInfo`). Names borrowed from another
+protocol or from Pi keep their original spelling, including literal values
+(`"api_key"` in a credential is Pi's value, kept verbatim).
 
 ## Components
 
