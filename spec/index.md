@@ -40,6 +40,13 @@ surface, not the code. Like Pi, Pino is minimal and extensible.
   in any language and interoperate, because conformance means speaking the
   schemas, not linking the code.
 
+## Conventions
+
+Method names are snake_case; message field names are camelCase — ACP's
+convention, adopted wholesale (`session/set_config_option` carrying
+`sessionId`-style fields). Field names borrowed from another protocol keep
+their original spelling (`clientInfo`, `serverInfo`, as in MCP).
+
 ## Components
 
 A **session** is the durable object: an identity plus its log. Sessions

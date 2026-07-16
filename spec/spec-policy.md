@@ -64,8 +64,10 @@ clarity.
 
 A spec describes the system as it is now, as if the current design is the
 only one that ever existed. It defines its terms up front (terms are
-italicized when defined, owned by one spec each), assumes a competent
-engineer with no project history, and never leans on insider history —
+defined authoritatively in [[terms.md]], italicized on definition and
+maintained by review; other specs use them and elaborate behavior), assumes
+a competent engineer with no project history, and never leans on insider
+history —
 except when history is genuinely the clearest explanation of a present
 wrinkle. Negative boundaries are good spec language ("does not validate
 inputs") when a reader might otherwise assume the opposite.
